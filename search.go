@@ -59,12 +59,14 @@ func (ft FlexibleTime) MarshalJSON() ([]byte, error) {
 }
 
 type SearchParams struct {
-	Q        string `json:"q"`
-	QueryBy  string `json:"query_by,omitempty"`
-	FilterBy string `json:"filter_by,omitempty"`
-	SortBy   string `json:"sort_by,omitempty"`
-	Page     int    `json:"page,omitempty"`
-	PerPage  int    `json:"per_page,omitempty"`
+	Q          string `json:"q"`
+	QueryBy    string `json:"query_by,omitempty"`
+	FilterBy   string `json:"filter_by,omitempty"`
+	SortBy     string `json:"sort_by,omitempty"`
+	Page       int    `json:"page,omitempty"`
+	PerPage    int    `json:"per_page,omitempty"`
+	GroupBy    string `json:"group_by,omitempty"`
+	GroupLimit int    `json:"group_limit,omitempty"`
 }
 
 type SearchResponse struct {
@@ -73,7 +75,14 @@ type SearchResponse struct {
 	Page          int          `json:"page"`
 	RequestParams SearchParams `json:"request_params"`
 	SearchTimeMs  int          `json:"search_time_ms"`
-	Hits          []SearchHit  `json:"hits"`
+	Hits          []SearchHit  `json:"hits,omitempty"`
+	// grouped results
+	GroupedHits []GroupedHit `json:"grouped_hits,omitempty"`
+}
+
+type GroupedHit struct {
+	GroupKey []string    `json:"group_key,omitempty"`
+	Hits     []SearchHit `json:"hits"`
 }
 
 type SearchHit struct {
