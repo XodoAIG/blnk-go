@@ -1,6 +1,6 @@
 module escrow-application
 
-go 1.22.2
+go 1.25.3
 
 require github.com/blnkfinance/blnk-go v1.1.0
 

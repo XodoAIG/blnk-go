@@ -22,10 +22,12 @@ func TestSearchService_SearchDocument_Success(t *testing.T) {
 	mockClient, svc := setupSearchService()
 
 	body := blnkgo.SearchParams{
-		Q:       "test query",
-		QueryBy: "field",
-		Page:    1,
-		PerPage: 10,
+		Q:          "test query",
+		QueryBy:    "field",
+		Page:       1,
+		PerPage:    10,
+		GroupBy:    "",
+		GroupLimit: 1,
 	}
 
 	expectedResponse := &blnkgo.SearchResponse{
@@ -33,10 +35,12 @@ func TestSearchService_SearchDocument_Success(t *testing.T) {
 		OutOf: 1,
 		Page:  1,
 		RequestParams: blnkgo.SearchParams{
-			Q:       "test query",
-			QueryBy: "field",
-			Page:    1,
-			PerPage: 10,
+			Q:          "test query",
+			QueryBy:    "field",
+			Page:       1,
+			PerPage:    10,
+			GroupBy:    "",
+			GroupLimit: 1,
 		},
 		SearchTimeMs: 100,
 		Hits: []blnkgo.SearchHit{
@@ -89,10 +93,12 @@ func TestSearchService_SearchDocument_EmptyRequest(t *testing.T) {
 func TestSearchService_SearchDocument_ServerError(t *testing.T) {
 	mockClient, svc := setupSearchService()
 	body := blnkgo.SearchParams{
-		Q:       "test query",
-		QueryBy: "field",
-		Page:    1,
-		PerPage: 10,
+		Q:          "test query",
+		QueryBy:    "field",
+		Page:       1,
+		PerPage:    10,
+		GroupBy:    "",
+		GroupLimit: 1,
 	}
 
 	expectedResp := &http.Response{StatusCode: http.StatusInternalServerError}
@@ -111,10 +117,12 @@ func TestSearchService_SearchDocument_ServerError(t *testing.T) {
 func TestSearchService_SearchDocument_InvalidResource(t *testing.T) {
 	mockClient, svc := setupSearchService()
 	body := blnkgo.SearchParams{
-		Q:       "test query",
-		QueryBy: "field",
-		Page:    1,
-		PerPage: 10,
+		Q:          "test query",
+		QueryBy:    "field",
+		Page:       1,
+		PerPage:    10,
+		GroupBy:    "",
+		GroupLimit: 1,
 	}
 
 	mockClient.On("NewRequest", "search/invalid_resource", http.MethodPost, body).Return(nil, fmt.Errorf("invalid resource"))
@@ -129,10 +137,12 @@ func TestSearchService_SearchDocument_InvalidResource(t *testing.T) {
 func TestSearchService_SearchDocument_EmptyResponse(t *testing.T) {
 	mockClient, svc := setupSearchService()
 	body := blnkgo.SearchParams{
-		Q:       "test query",
-		QueryBy: "field",
-		Page:    1,
-		PerPage: 10,
+		Q:          "test query",
+		QueryBy:    "field",
+		Page:       1,
+		PerPage:    10,
+		GroupBy:    "",
+		GroupLimit: 1,
 	}
 
 	mockClient.On("NewRequest", "search/ledgers", http.MethodPost, body).Return(&http.Request{}, nil)
@@ -152,6 +162,7 @@ func TestSearchService_SearchDocument_EmptyResponse(t *testing.T) {
 	assert.Equal(t, 0, searchResponse.Page)
 	assert.Equal(t, 0, searchResponse.SearchTimeMs)
 	assert.Empty(t, searchResponse.Hits)
+	assert.Empty(t, searchResponse.GroupedHits)
 	assert.NotNil(t, resp)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	mockClient.AssertExpectations(t)
@@ -450,7 +461,6 @@ func TestSearchDocument_EffectiveDate_Parsing(t *testing.T) {
 				if !tt.expectedTime.IsZero() {
 					assert.Equal(t, tt.expectedTime.Unix(), doc.EffectiveDate.Time.Unix())
 				} else {
-					// If no effective_date is provided, it should be zero time
 					assert.True(t, doc.EffectiveDate.Time.IsZero())
 				}
 			}
@@ -458,8 +468,200 @@ func TestSearchDocument_EffectiveDate_Parsing(t *testing.T) {
 	}
 }
 
+func TestSearchService_SearchDocument_WithGroupedHits(t *testing.T) {
+	mockClient, svc := setupSearchService()
+
+	body := blnkgo.SearchParams{
+		Q:          "bln_ad4980a0-415a-4fd4-a800-3eabbb48b090",
+		QueryBy:    "destination",
+		GroupBy:    "parent_transaction",
+		GroupLimit: 1,
+		Page:       1,
+		PerPage:    10,
+	}
+
+	expectedResponse := &blnkgo.SearchResponse{
+		Found: 29,
+		OutOf: 1948,
+		Page:  1,
+		RequestParams: blnkgo.SearchParams{
+			Q:       "bln_ad4980a0-415a-4fd4-a800-3eabbb48b090",
+			PerPage: 10,
+		},
+		SearchTimeMs: 1,
+		GroupedHits: []blnkgo.GroupedHit{
+			{
+				GroupKey: []string{"txn_7c779669-da6a-4bfb-ac03-a53dc7c5c568"},
+				Hits: []blnkgo.SearchHit{
+					{
+						Document: blnkgo.SearchDocument{
+							ID:                "txn_14706192-e53d-43cc-86a1-b8807a09b351",
+							TransactionID:     "txn_14706192-e53d-43cc-86a1-b8807a09b351",
+							Amount:            12.31,
+							AmountString:      "12.31",
+							Currency:          "BRL",
+							Description:       "Um uid 4063248968213714",
+							Destination:       "bln_ad4980a0-415a-4fd4-a800-3eabbb48b090",
+							Source:            "bln_d17a7c1f-6f0e-47b9-9360-aeee6f0f247e",
+							Status:            "APPLIED",
+							ParentTransaction: "txn_7c779669-da6a-4bfb-ac03-a53dc7c5c568",
+							CreatedAt:         blnkgo.FlexibleTime{Time: time.Unix(1764873061, 0)},
+						},
+					},
+				},
+			},
+			{
+				GroupKey: []string{"txn_56bc1ffd-d7d9-443d-8011-7c4fbc7e6677"},
+				Hits: []blnkgo.SearchHit{
+					{
+						Document: blnkgo.SearchDocument{
+							ID:                "txn_4b0a842c-2066-4097-8b4b-ed481fb269b1",
+							TransactionID:     "txn_4b0a842c-2066-4097-8b4b-ed481fb269b1",
+							Amount:            14.12,
+							AmountString:      "14.12",
+							Currency:          "BRL",
+							Destination:       "bln_ad4980a0-415a-4fd4-a800-3eabbb48b090",
+							Source:            "bln_d17a7c1f-6f0e-47b9-9360-aeee6f0f247e",
+							Status:            "APPLIED",
+							ParentTransaction: "txn_56bc1ffd-d7d9-443d-8011-7c4fbc7e6677",
+							CreatedAt:         blnkgo.FlexibleTime{Time: time.Unix(1764872164, 0)},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	mockClient.On("NewRequest", "search/transactions", http.MethodPost, body).Return(&http.Request{}, nil)
+	mockClient.On("CallWithRetry", mock.Anything, mock.Anything).Return(&http.Response{
+		StatusCode: http.StatusOK,
+	}, nil).Run(func(args mock.Arguments) {
+		searchResponse := args.Get(1).(*blnkgo.SearchResponse)
+		*searchResponse = *expectedResponse
+	})
+
+	searchResponse, resp, err := svc.SearchDocument(body, "transactions")
+
+	assert.NoError(t, err)
+	assert.NotNil(t, searchResponse)
+	assert.Equal(t, 29, searchResponse.Found)
+	assert.Equal(t, 1948, searchResponse.OutOf)
+	assert.Equal(t, 1, searchResponse.Page)
+	assert.Equal(t, 1, searchResponse.SearchTimeMs)
+	assert.Empty(t, searchResponse.Hits)
+	assert.NotEmpty(t, searchResponse.GroupedHits)
+	assert.Len(t, searchResponse.GroupedHits, 2)
+
+	// Verify first group
+	firstGroup := searchResponse.GroupedHits[0]
+	assert.Equal(t, []string{"txn_7c779669-da6a-4bfb-ac03-a53dc7c5c568"}, firstGroup.GroupKey)
+	assert.Len(t, firstGroup.Hits, 1)
+	assert.Equal(t, "txn_14706192-e53d-43cc-86a1-b8807a09b351", firstGroup.Hits[0].Document.TransactionID)
+	assert.Equal(t, "txn_7c779669-da6a-4bfb-ac03-a53dc7c5c568", firstGroup.Hits[0].Document.ParentTransaction)
+
+	// Verify second group
+	secondGroup := searchResponse.GroupedHits[1]
+	assert.Equal(t, []string{"txn_56bc1ffd-d7d9-443d-8011-7c4fbc7e6677"}, secondGroup.GroupKey)
+	assert.Len(t, secondGroup.Hits, 1)
+	assert.Equal(t, "txn_4b0a842c-2066-4097-8b4b-ed481fb269b1", secondGroup.Hits[0].Document.TransactionID)
+	assert.Equal(t, "txn_56bc1ffd-d7d9-443d-8011-7c4fbc7e6677", secondGroup.Hits[0].Document.ParentTransaction)
+
+	assert.NotNil(t, resp)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	mockClient.AssertExpectations(t)
+}
+
+func TestSearchService_SearchDocument_WithRegularHits(t *testing.T) {
+	mockClient, svc := setupSearchService()
+
+	body := blnkgo.SearchParams{
+		Q:       "bln_ad4980a0-415a-4fd4-a800-3eabbb48b090",
+		QueryBy: "destination",
+		Page:    1,
+		PerPage: 10,
+	}
+
+	expectedResponse := &blnkgo.SearchResponse{
+		Found: 61,
+		OutOf: 0,
+		Page:  1,
+		RequestParams: blnkgo.SearchParams{
+			Q:       "bln_ad4980a0-415a-4fd4-a800-3eabbb48b090",
+			PerPage: 10,
+		},
+		SearchTimeMs: 1,
+		Hits: []blnkgo.SearchHit{
+			{
+				Document: blnkgo.SearchDocument{
+					ID:                "txn_14706192-e53d-43cc-86a1-b8807a09b351",
+					TransactionID:     "txn_14706192-e53d-43cc-86a1-b8807a09b351",
+					Amount:            12.31,
+					AmountString:      "12.31",
+					Currency:          "BRL",
+					Description:       "Um uid 4063248968213714",
+					Destination:       "bln_ad4980a0-415a-4fd4-a800-3eabbb48b090",
+					Source:            "bln_d17a7c1f-6f0e-47b9-9360-aeee6f0f247e",
+					Status:            "APPLIED",
+					ParentTransaction: "txn_7c779669-da6a-4bfb-ac03-a53dc7c5c568",
+					CreatedAt:         blnkgo.FlexibleTime{Time: time.Unix(1764873061, 0)},
+				},
+			},
+			{
+				Document: blnkgo.SearchDocument{
+					ID:                "txn_8ad25be5-e25d-4f11-bc79-d1f208f0a7e0",
+					TransactionID:     "txn_8ad25be5-e25d-4f11-bc79-d1f208f0a7e0",
+					Amount:            12.31,
+					AmountString:      "12.31",
+					Currency:          "BRL",
+					Destination:       "bln_ad4980a0-415a-4fd4-a800-3eabbb48b090",
+					Source:            "bln_d17a7c1f-6f0e-47b9-9360-aeee6f0f247e",
+					Status:            "INFLIGHT",
+					ParentTransaction: "txn_7c779669-da6a-4bfb-ac03-a53dc7c5c568",
+					Inflight:          true,
+					CreatedAt:         blnkgo.FlexibleTime{Time: time.Unix(1764873018, 0)},
+				},
+			},
+		},
+	}
+
+	mockClient.On("NewRequest", "search/transactions", http.MethodPost, body).Return(&http.Request{}, nil)
+	mockClient.On("CallWithRetry", mock.Anything, mock.Anything).Return(&http.Response{
+		StatusCode: http.StatusOK,
+	}, nil).Run(func(args mock.Arguments) {
+		searchResponse := args.Get(1).(*blnkgo.SearchResponse)
+		*searchResponse = *expectedResponse
+	})
+
+	searchResponse, resp, err := svc.SearchDocument(body, "transactions")
+
+	assert.NoError(t, err)
+	assert.NotNil(t, searchResponse)
+	assert.Equal(t, 61, searchResponse.Found)
+	assert.Equal(t, 0, searchResponse.OutOf)
+	assert.Equal(t, 1, searchResponse.Page)
+	assert.Equal(t, 1, searchResponse.SearchTimeMs)
+	assert.NotEmpty(t, searchResponse.Hits)
+	assert.Empty(t, searchResponse.GroupedHits)
+	assert.Len(t, searchResponse.Hits, 2)
+
+	// Verify first hit
+	firstHit := searchResponse.Hits[0]
+	assert.Equal(t, "txn_14706192-e53d-43cc-86a1-b8807a09b351", firstHit.Document.TransactionID)
+	assert.Equal(t, "APPLIED", firstHit.Document.Status)
+	assert.Equal(t, 12.31, firstHit.Document.Amount)
+
+	// Verify second hit
+	secondHit := searchResponse.Hits[1]
+	assert.Equal(t, "txn_8ad25be5-e25d-4f11-bc79-d1f208f0a7e0", secondHit.Document.TransactionID)
+	assert.Equal(t, "INFLIGHT", secondHit.Document.Status)
+	assert.True(t, secondHit.Document.Inflight)
+
+	assert.NotNil(t, resp)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	mockClient.AssertExpectations(t)
+}
+
 func TestSearchDocument_LedgerFields(t *testing.T) {
-	// JSON response similar to what's returned by the API for ledgers
 	ledgerJSON := `{
 		"created_at": 1754599640,
 		"id": "ldg_40688495-864f-4442-ac37-68dba582b755",
@@ -473,20 +675,16 @@ func TestSearchDocument_LedgerFields(t *testing.T) {
 
 	assert.NoError(t, err)
 
-	// Test ledger-specific fields
 	assert.Equal(t, "ldg_40688495-864f-4442-ac37-68dba582b755", doc.ID)
 	assert.Equal(t, "ldg_40688495-864f-4442-ac37-68dba582b755", doc.LedgerID)
 	assert.Equal(t, "Motorista (destino)", doc.Name)
 
-	// Test common fields
 	assert.NotNil(t, doc.MetaData)
 	assert.NotZero(t, doc.CreatedAt.Time)
 
-	// Test that time field was parsed correctly
 	expectedTime := time.Unix(1754599640, 0)
 	assert.Equal(t, expectedTime, doc.CreatedAt.Time)
 
-	// Test that metadata is correctly parsed as string
 	if metaStr, ok := doc.MetaData.(string); ok {
 		assert.Contains(t, metaStr, "motorista pontos")
 	}
