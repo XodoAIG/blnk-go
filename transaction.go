@@ -50,7 +50,7 @@ type Transaction struct {
 
 type UpdateStatus struct {
 	Status        InflightStatus `json:"status"`
-	Amount        float64        `json:"amount"`
+	Amount        *float64       `json:"amount"`
 	PreciseAmount *big.Int       `json:"precise_amount"`
 }
 
