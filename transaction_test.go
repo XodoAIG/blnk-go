@@ -1,6 +1,7 @@
 package blnkgo_test
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -411,6 +412,184 @@ func TestRefundTransaction(t *testing.T) {
 	mockClient.AssertExpectations(t)
 }
 
+func TestRefundTransaction_BackwardCompatibleNoBody(t *testing.T) {
+	mockClient, svc := setupTransactionService()
+
+	mockClient.On("NewRequest", "refund-transaction/txn-compat", http.MethodPost, nil).Return(&http.Request{}, nil)
+	mockClient.On("CallWithRetry", mock.Anything, mock.Anything).Return(&http.Response{
+		StatusCode: http.StatusCreated,
+	}, nil)
+
+	_, resp, err := svc.Refund("txn-compat")
+
+	assert.NoError(t, err)
+	assert.Equal(t, http.StatusCreated, resp.StatusCode)
+	mockClient.AssertCalled(t, "NewRequest", "refund-transaction/txn-compat", http.MethodPost, nil)
+	mockClient.AssertExpectations(t)
+}
+
+func TestRefundTransaction_ExplicitNilBody(t *testing.T) {
+	mockClient, svc := setupTransactionService()
+
+	mockClient.On("NewRequest", "refund-transaction/txn-nil-body", http.MethodPost, nil).Return(&http.Request{}, nil)
+	mockClient.On("CallWithRetry", mock.Anything, mock.Anything).Return(&http.Response{
+		StatusCode: http.StatusCreated,
+	}, nil)
+
+	_, _, err := svc.Refund("txn-nil-body", nil)
+
+	assert.NoError(t, err)
+	mockClient.AssertCalled(t, "NewRequest", "refund-transaction/txn-nil-body", http.MethodPost, nil)
+	mockClient.AssertExpectations(t)
+}
+
+func TestRefundTransaction_TooManyBodies(t *testing.T) {
+	mockClient, svc := setupTransactionService()
+
+	result, resp, err := svc.Refund("txn-123",
+		&blnkgo.RefundTransactionRequest{SkipQueue: true},
+		&blnkgo.RefundTransactionRequest{SkipQueue: true},
+	)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "at most one optional request body")
+	assert.Nil(t, result)
+	assert.Nil(t, resp)
+	mockClient.AssertNotCalled(t, "NewRequest")
+}
+
+func TestTransaction_ParentTransaction_UnmarshalJSON(t *testing.T) {
+	payload := []byte(`{
+		"transaction_id": "txn_refund_1",
+		"parent_transaction": "txn_original_1",
+		"amount": 500,
+		"source": "@Recipient",
+		"destination": "@FundingPool",
+		"status": "APPLIED"
+	}`)
+
+	var txn blnkgo.Transaction
+	err := json.Unmarshal(payload, &txn)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "txn_refund_1", txn.TransactionID)
+	assert.Equal(t, "txn_original_1", txn.ParentTransactionID)
+	assert.Equal(t, float64(500), txn.Amount)
+	assert.Equal(t, "@Recipient", txn.Source)
+	assert.Equal(t, "@FundingPool", txn.Destination)
+	assert.Equal(t, blnkgo.PryTransactionStatus("APPLIED"), txn.Status)
+}
+
+func TestRefundTransaction_WithSkipQueue(t *testing.T) {
+	mockClient, svc := setupTransactionService()
+	refundBody := &blnkgo.RefundTransactionRequest{SkipQueue: true}
+
+	mockClient.On(
+		"NewRequest",
+		"refund-transaction/txn-456",
+		http.MethodPost,
+		mock.MatchedBy(func(body interface{}) bool {
+			req, ok := body.(*blnkgo.RefundTransactionRequest)
+			return ok && req.SkipQueue
+		}),
+	).Return(&http.Request{}, nil)
+	mockClient.On("CallWithRetry", mock.Anything, mock.Anything).Return(&http.Response{
+		StatusCode: http.StatusCreated,
+	}, nil).Run(func(args mock.Arguments) {
+		transaction := args.Get(1).(*blnkgo.Transaction)
+		*transaction = blnkgo.Transaction{
+			ParentTransaction: blnkgo.ParentTransaction{
+				Status: blnkgo.PryTransactionStatus("APPLIED"),
+			},
+			TransactionID: "txn-refund-sync",
+		}
+	})
+
+	result, resp, err := svc.Refund("txn-456", refundBody)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, resp)
+	assert.Equal(t, http.StatusCreated, resp.StatusCode)
+	assert.Equal(t, "txn-refund-sync", result.TransactionID)
+	assert.Equal(t, blnkgo.PryTransactionStatus("APPLIED"), result.Status)
+	mockClient.AssertExpectations(t)
+}
+
+func TestUpdateStatus_WithSkipQueue(t *testing.T) {
+	mockClient, svc := setupTransactionService()
+	body := blnkgo.UpdateStatus{
+		Status:    blnkgo.InflightStatusCommit,
+		SkipQueue: true,
+	}
+
+	mockClient.On(
+		"NewRequest",
+		"transactions/inflight/txn-inflight-1",
+		http.MethodPut,
+		mock.MatchedBy(func(req interface{}) bool {
+			update, ok := req.(blnkgo.UpdateStatus)
+			return ok && update.SkipQueue && update.Status == blnkgo.InflightStatusCommit
+		}),
+	).Return(&http.Request{}, nil)
+	mockClient.On("CallWithRetry", mock.Anything, mock.Anything).Return(&http.Response{
+		StatusCode: http.StatusOK,
+	}, nil).Run(func(args mock.Arguments) {
+		transaction := args.Get(1).(*blnkgo.Transaction)
+		*transaction = blnkgo.Transaction{
+			TransactionID: "txn-inflight-1",
+			ParentTransaction: blnkgo.ParentTransaction{
+				Status: blnkgo.PryTransactionStatus("APPLIED"),
+			},
+		}
+	})
+
+	result, resp, err := svc.Update("txn-inflight-1", body)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, resp)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, blnkgo.PryTransactionStatus("APPLIED"), result.Status)
+	mockClient.AssertExpectations(t)
+}
+
+func TestUpdateStatus_SkipQueueJSONMarshal(t *testing.T) {
+	body := blnkgo.UpdateStatus{
+		Status:    blnkgo.InflightStatusCommit,
+		SkipQueue: true,
+	}
+	data, err := json.Marshal(body)
+	assert.NoError(t, err)
+	assert.Contains(t, string(data), `"skip_queue":true`)
+}
+
+func TestTransaction_Queued_UnmarshalJSON(t *testing.T) {
+	payload := []byte(`{
+		"transaction_id": "txn_queued_commit",
+		"status": "INFLIGHT",
+		"queued": true
+	}`)
+
+	var txn blnkgo.Transaction
+	err := json.Unmarshal(payload, &txn)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "txn_queued_commit", txn.TransactionID)
+	assert.True(t, txn.Queued)
+	assert.Equal(t, blnkgo.PryTransactionStatus("INFLIGHT"), txn.Status)
+}
+
+func TestRefundTransaction_EmptyTransactionID(t *testing.T) {
+	mockClient, svc := setupTransactionService()
+
+	result, resp, err := svc.Refund("")
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "transactionID is required")
+	assert.Nil(t, result)
+	assert.Nil(t, resp)
+	mockClient.AssertNotCalled(t, "NewRequest")
+}
+
 func TestRefundTransaction_FailedRequest(t *testing.T) {
 	mockClient, svc := setupTransactionService()
 
@@ -679,6 +858,43 @@ func TestTransactionService_Filter_ServerError(t *testing.T) {
 	mockClient.AssertExpectations(t)
 }
 
+func TestCreateTransactionWithAtomicFlag(t *testing.T) {
+	mockClient, svc := setupTransactionService()
+
+	body := blnkgo.CreateTransactionRequest{
+		ParentTransaction: blnkgo.ParentTransaction{
+			Amount:      1000,
+			Reference:   "ref-atomic",
+			Precision:   100,
+			Currency:    "USD",
+			Source:      "@bank-account",
+			Destination: "@World",
+			Description: "Atomic transaction",
+			Atomic:      true,
+		},
+	}
+	fixedTime := time.Date(2023, time.October, 1, 0, 0, 0, 0, time.UTC)
+
+	mockClient.On("NewRequest", "transactions", http.MethodPost, body).Return(&http.Request{}, nil)
+	mockClient.On("CallWithRetry", mock.Anything, mock.Anything).Return(&http.Response{StatusCode: http.StatusCreated}, nil).Run(func(args mock.Arguments) {
+		transaction := args.Get(1).(*blnkgo.Transaction)
+		*transaction = blnkgo.Transaction{
+			ParentTransaction: body.ParentTransaction,
+			TransactionID:     "txn-atomic-123",
+			CreatedAt:         fixedTime,
+		}
+	})
+
+	transaction, resp, err := svc.Create(body)
+	assert.NoError(t, err)
+	assert.NotNil(t, resp)
+	assert.Equal(t, http.StatusCreated, resp.StatusCode)
+	assert.Equal(t, "txn-atomic-123", transaction.TransactionID)
+	assert.True(t, transaction.Atomic)
+
+	mockClient.AssertExpectations(t)
+}
+
 func TestCreateTransactionWithInflightCommitDate(t *testing.T) {
 	mockClient, svc := setupTransactionService()
 	effectiveDate := time.Date(2023, time.September, 20, 14, 30, 0, 0, time.UTC)
@@ -807,5 +1023,225 @@ func TestCreateTransactionInflightCommitDateWithoutInflight(t *testing.T) {
 	assert.Equal(t, http.StatusCreated, resp.StatusCode)
 	assert.Equal(t, "txn-no-inflight-789", transaction.TransactionID)
 
+	mockClient.AssertExpectations(t)
+}
+
+func validBulkTransactionRequest() blnkgo.CreateBulkTransactionRequest {
+	return blnkgo.CreateBulkTransactionRequest{
+		Atomic: true,
+		Transactions: []blnkgo.CreateTransactionRequest{
+			{
+				ParentTransaction: blnkgo.ParentTransaction{
+					Amount:      500,
+					Reference:   "bulk-ref-1",
+					Precision:   100,
+					Currency:    "USD",
+					Source:      "@FundingPool",
+					Destination: "@Recipient",
+					Description: "Bulk transaction 1",
+				},
+			},
+			{
+				ParentTransaction: blnkgo.ParentTransaction{
+					Amount:      750,
+					Reference:   "bulk-ref-2",
+					Precision:   100,
+					Currency:    "USD",
+					Source:      "@FundingPool",
+					Destination: "@Recipient",
+					Description: "Bulk transaction 2",
+				},
+			},
+		},
+	}
+}
+
+func TestTransactionService_CreateBulk_Success(t *testing.T) {
+	mockClient, svc := setupTransactionService()
+	body := validBulkTransactionRequest()
+
+	expectedResponse := &blnkgo.CreateBulkTransactionResponse{
+		BatchID:          "bulk_abc123",
+		Status:           "applied",
+		TransactionCount: 2,
+	}
+
+	mockClient.On("NewRequest", "transactions/bulk", http.MethodPost, body).Return(&http.Request{}, nil)
+	mockClient.On("CallWithRetry", mock.Anything, mock.Anything).Return(&http.Response{
+		StatusCode: http.StatusCreated,
+	}, nil).Run(func(args mock.Arguments) {
+		response := args.Get(1).(*blnkgo.CreateBulkTransactionResponse)
+		*response = *expectedResponse
+	})
+
+	result, resp, err := svc.CreateBulk(body)
+
+	assert.NoError(t, err)
+	assert.Equal(t, expectedResponse, result)
+	assert.NotNil(t, resp)
+	assert.Equal(t, http.StatusCreated, resp.StatusCode)
+	mockClient.AssertExpectations(t)
+}
+
+func TestTransactionService_CreateBulk_AsyncSuccess(t *testing.T) {
+	mockClient, svc := setupTransactionService()
+	body := validBulkTransactionRequest()
+	body.RunAsync = true
+
+	expectedResponse := &blnkgo.CreateBulkTransactionResponse{
+		BatchID: "bulk_async123",
+		Status:  "processing",
+		Message: "Bulk transaction processing started",
+	}
+
+	mockClient.On("NewRequest", "transactions/bulk", http.MethodPost, body).Return(&http.Request{}, nil)
+	mockClient.On("CallWithRetry", mock.Anything, mock.Anything).Return(&http.Response{
+		StatusCode: http.StatusAccepted,
+	}, nil).Run(func(args mock.Arguments) {
+		response := args.Get(1).(*blnkgo.CreateBulkTransactionResponse)
+		*response = *expectedResponse
+	})
+
+	result, resp, err := svc.CreateBulk(body)
+
+	assert.NoError(t, err)
+	assert.Equal(t, expectedResponse, result)
+	assert.NotNil(t, resp)
+	assert.Equal(t, http.StatusAccepted, resp.StatusCode)
+	mockClient.AssertExpectations(t)
+}
+
+func TestCreateBulkTransactionResponse_UnmarshalJSON(t *testing.T) {
+	tests := []struct {
+		name     string
+		payload  string
+		expected blnkgo.CreateBulkTransactionResponse
+	}{
+		{
+			name: "sync applied response",
+			payload: `{
+				"batch_id": "bulk_c62f200b-905f-4983-a349-cadd279234aa",
+				"status": "applied",
+				"transaction_count": 4
+			}`,
+			expected: blnkgo.CreateBulkTransactionResponse{
+				BatchID:          "bulk_c62f200b-905f-4983-a349-cadd279234aa",
+				Status:           "applied",
+				TransactionCount: 4,
+			},
+		},
+		{
+			name: "async queued response with message",
+			payload: `{
+				"batch_id": "bulk_c62f200b-905f-4983-a349-cadd279234aa",
+				"status": "queued",
+				"message": "Bulk transaction processing started"
+			}`,
+			expected: blnkgo.CreateBulkTransactionResponse{
+				BatchID: "bulk_c62f200b-905f-4983-a349-cadd279234aa",
+				Status:  "queued",
+				Message: "Bulk transaction processing started",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var response blnkgo.CreateBulkTransactionResponse
+			err := json.Unmarshal([]byte(tt.payload), &response)
+			assert.NoError(t, err)
+			assert.Equal(t, tt.expected, response)
+		})
+	}
+}
+
+func TestTransactionService_CreateBulk_EmptyTransactions(t *testing.T) {
+	mockClient, svc := setupTransactionService()
+
+	result, resp, err := svc.CreateBulk(blnkgo.CreateBulkTransactionRequest{})
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "transactions array cannot be empty")
+	assert.Nil(t, result)
+	assert.Nil(t, resp)
+	mockClient.AssertNotCalled(t, "NewRequest")
+	mockClient.AssertNotCalled(t, "CallWithRetry")
+}
+
+func TestTransactionService_CreateBulk_TooManyTransactions(t *testing.T) {
+	mockClient, svc := setupTransactionService()
+	txns := make([]blnkgo.CreateTransactionRequest, blnkgo.MaxBulkCreateItems+1)
+
+	result, resp, err := svc.CreateBulk(blnkgo.CreateBulkTransactionRequest{Transactions: txns})
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "too many transactions")
+	assert.Nil(t, result)
+	assert.Nil(t, resp)
+	mockClient.AssertNotCalled(t, "NewRequest")
+	mockClient.AssertNotCalled(t, "CallWithRetry")
+}
+
+func TestTransactionService_CreateBulk_InvalidTransaction(t *testing.T) {
+	mockClient, svc := setupTransactionService()
+	body := validBulkTransactionRequest()
+	body.Transactions[0].Source = ""
+
+	result, resp, err := svc.CreateBulk(body)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "transaction at index 0")
+	assert.Nil(t, result)
+	assert.Nil(t, resp)
+	mockClient.AssertNotCalled(t, "NewRequest")
+	mockClient.AssertNotCalled(t, "CallWithRetry")
+}
+
+func TestTransactionService_CreateBulk_DuplicateReferences(t *testing.T) {
+	mockClient, svc := setupTransactionService()
+	body := validBulkTransactionRequest()
+	body.Transactions[1].Reference = body.Transactions[0].Reference
+
+	result, resp, err := svc.CreateBulk(body)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "unique references")
+	assert.Nil(t, result)
+	assert.Nil(t, resp)
+	mockClient.AssertNotCalled(t, "NewRequest")
+	mockClient.AssertNotCalled(t, "CallWithRetry")
+}
+
+func TestTransactionService_CreateBulk_NewRequestError(t *testing.T) {
+	mockClient, svc := setupTransactionService()
+	body := validBulkTransactionRequest()
+
+	mockClient.On("NewRequest", "transactions/bulk", http.MethodPost, body).Return(nil, errors.New("failed to create request"))
+
+	result, resp, err := svc.CreateBulk(body)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to create request")
+	assert.Nil(t, result)
+	assert.Nil(t, resp)
+	mockClient.AssertNotCalled(t, "CallWithRetry")
+	mockClient.AssertExpectations(t)
+}
+
+func TestTransactionService_CreateBulk_ServerError(t *testing.T) {
+	mockClient, svc := setupTransactionService()
+	body := validBulkTransactionRequest()
+
+	mockClient.On("NewRequest", "transactions/bulk", http.MethodPost, body).Return(&http.Request{}, nil)
+	mockClient.On("CallWithRetry", mock.Anything, mock.Anything).Return(&http.Response{
+		StatusCode: http.StatusBadRequest,
+	}, errors.New("invalid destination"))
+
+	result, resp, err := svc.CreateBulk(body)
+
+	assert.Error(t, err)
+	assert.Nil(t, result)
+	assert.NotNil(t, resp)
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 	mockClient.AssertExpectations(t)
 }
