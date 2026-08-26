@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -20,7 +21,9 @@ type LedgerBalance struct {
 	InflightDebitBalance  *big.Int               `json:"inflight_debit_balance"`
 	QueuedDebitBalance    *big.Int               `json:"queued_debit_balance,omitempty"`
 	QueuedCreditBalance   *big.Int               `json:"queued_credit_balance,omitempty"`
-	CurrencyMultiplier    float64                `json:"currency_multiplier"`
+	// CurrencyMultiplier is omitted from Core 0.15.0+ balance responses (zero when absent).
+	// Kept as float64 for source compatibility with existing callers.
+	CurrencyMultiplier float64 `json:"currency_multiplier,omitempty"`
 	Precision             int                    `json:"precision"`
 	LedgerID              string                 `json:"ledger_id"`
 	IdentityID            string                 `json:"identity_id"`
@@ -46,6 +49,8 @@ type CreateLedgerBalanceRequest struct {
 type GetBalanceRequest struct {
 	// FromSource reconstructs the balance from transactions instead of snapshots.
 	FromSource bool `json:"from_source,omitempty"`
+	// WithQueued includes queued debit/credit balances in the response.
+	WithQueued bool `json:"with_queued,omitempty"`
 }
 
 func (s *LedgerBalanceService) Create(body CreateLedgerBalanceRequest) (*LedgerBalance, *http.Response, error) {
@@ -68,6 +73,23 @@ func (s *LedgerBalanceService) Create(body CreateLedgerBalanceRequest) (*LedgerB
 	return ledgerBalance, resp, nil
 }
 
+// List returns balances via GET /balances.
+// Core applies default pagination (limit=10, offset=0) when query params are omitted.
+func (s *LedgerBalanceService) List() ([]LedgerBalance, *http.Response, error) {
+	req, err := s.client.NewRequest("balances", http.MethodGet, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var balances []LedgerBalance
+	resp, err := s.client.CallWithRetry(req, &balances)
+	if err != nil {
+		return nil, resp, err
+	}
+
+	return balances, resp, nil
+}
+
 func (s *LedgerBalanceService) Get(balanceID string, opts ...*GetBalanceRequest) (*LedgerBalance, *http.Response, error) {
 	if balanceID == "" {
 		return nil, nil, fmt.Errorf("invalid: id is required")
@@ -76,8 +98,17 @@ func (s *LedgerBalanceService) Get(balanceID string, opts ...*GetBalanceRequest)
 		return nil, nil, fmt.Errorf("Get accepts at most one optional request")
 	}
 	u := fmt.Sprintf("balances/%s", balanceID)
-	if len(opts) > 0 && opts[0] != nil && opts[0].FromSource {
-		u += "?from_source=true"
+	if len(opts) > 0 && opts[0] != nil {
+		var params []string
+		if opts[0].FromSource {
+			params = append(params, "from_source=true")
+		}
+		if opts[0].WithQueued {
+			params = append(params, "with_queued=true")
+		}
+		if len(params) > 0 {
+			u += "?" + strings.Join(params, "&")
+		}
 	}
 	req, err := s.client.NewRequest(u, http.MethodGet, nil)
 	if err != nil {

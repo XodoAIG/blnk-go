@@ -199,6 +199,23 @@ if err != nil {
 fmt.Printf("Ledger Updated: %+v\n", updatedLedger)
 ```
 
+### Listing Ledgers
+
+Retrieve ledgers with `GET /ledgers`. Core applies default pagination (`limit=10`, `offset=0`) when no query parameters are passed:
+
+```go
+ledgers, resp, err := client.Ledger.List()
+if err != nil {
+    fmt.Printf("Error listing ledgers: %v\n", err)
+    return
+}
+
+fmt.Printf("Ledgers: %+v\n", ledgers)
+fmt.Printf("Status Code: %d\n", resp.StatusCode)
+```
+
+For structured queries, use `Ledger.Filter` instead.
+
 ---
 
 ## 5. Creating Balances
@@ -229,6 +246,25 @@ if err != nil {
 fmt.Printf("Balance Created: %+v\n", newBalance)
 ```
 
+### Listing Balances
+
+Retrieve balances with `GET /balances`. Core applies default pagination (`limit=10`, `offset=0`) when no query parameters are passed:
+
+```go
+balances, resp, err := client.LedgerBalance.List()
+if err != nil {
+    fmt.Printf("Error listing balances: %v\n", err)
+    return
+}
+
+fmt.Printf("Balances: %+v\n", balances)
+fmt.Printf("Status Code: %d\n", resp.StatusCode)
+```
+
+For structured queries, use `LedgerBalance.Filter` instead.
+
+> **Core 0.15.0+:** Balance responses no longer include `currency_multiplier`. The field remains on `LedgerBalance` as `float64` for compatibility and is `0` when Core omits it.
+
 To enable fund lineage tracking on create, set `track_fund_lineage` (requires `identity_id`) and optionally `allocation_strategy`:
 
 ```go
@@ -243,20 +279,24 @@ balanceBody := blnkgo.CreateLedgerBalanceRequest{
 lineageBalance, resp, err := client.LedgerBalance.Create(balanceBody)
 ```
 
-### Retrieving a Balance (from source)
+### Retrieving a Balance
 
-By default, `Get` returns the stored balance snapshot. Pass `from_source: true` to reconstruct the balance from all transactions instead:
+By default, `Get` returns the stored balance snapshot. Optional query parameters:
+
+- `from_source: true` — reconstruct the balance from all transactions instead of snapshots
+- `with_queued: true` — include queued debit/credit balances in the response
 
 ```go
 balance, resp, err := client.LedgerBalance.Get(newBalance.BalanceID, &blnkgo.GetBalanceRequest{
     FromSource: true,
+    WithQueued: true,
 })
 if err != nil {
-    fmt.Printf("Error fetching balance from source: %v\n", err)
+    fmt.Printf("Error fetching balance: %v\n", err)
     return
 }
 
-fmt.Printf("Balance from source: %+v\n", balance)
+fmt.Printf("Balance: %+v\n", balance)
 ```
 
 Existing callers can keep using `client.LedgerBalance.Get(balanceID)` with no second argument.
@@ -347,6 +387,25 @@ if err != nil {
 
 fmt.Printf("Transaction Recorded: %+v\n", newTransaction)
 ```
+
+### Listing Transactions
+
+Retrieve transactions with `GET /transactions`. Core applies default pagination (`limit=20`, `offset=0`) when no query parameters are passed:
+
+```go
+transactions, resp, err := client.Transaction.List()
+if err != nil {
+    fmt.Printf("Error listing transactions: %v\n", err)
+    return
+}
+
+fmt.Printf("Transactions: %+v\n", transactions)
+fmt.Printf("Status Code: %d\n", resp.StatusCode)
+```
+
+For structured queries, use `Transaction.Filter` instead.
+
+> **Core 0.15.0+:** Transaction responses no longer include `rate` (or `modification_ref`). You can still set `Rate: 1.1` on create for multi-currency transfers; omitted response values decode as `0`.
 
 ### Recording Bulk Transactions
 
@@ -611,6 +670,19 @@ if err != nil {
 }
 
 fmt.Printf("Monitor Created: %+v\n", monitor)
+```
+
+List monitors for a specific balance:
+
+```go
+monitors, resp, err := client.BalanceMonitor.ListByBalanceID(newBalance.BalanceID)
+if err != nil {
+    fmt.Printf("Error listing monitors: %v\n", err)
+    return
+}
+
+fmt.Printf("Monitors: %+v\n", monitors)
+fmt.Printf("Status Code: %d\n", resp.StatusCode)
 ```
 
 Delete a balance monitor (Core 0.15.0+):
@@ -1035,6 +1107,23 @@ balances, resp, err := client.Search.SearchBalances(searchParams)
 
 // Search ledgers
 ledgers, resp, err := client.Search.SearchLedgers(searchParams)
+```
+
+Search across multiple collections in one request:
+
+```go
+multi, resp, err := client.Search.MultiSearch(blnkgo.MultiSearchRequest{
+    Searches: []blnkgo.MultiSearchCollectionParams{
+        {Collection: "ledgers", Q: "General", QueryBy: "name", PerPage: 5},
+        {Collection: "balances", Q: "*", QueryBy: "currency", PerPage: 5},
+    },
+})
+if err != nil {
+    log.Fatal(err)
+}
+for i, result := range multi.Results {
+    fmt.Printf("search[%d] found=%d\n", i, result.Found)
+}
 ```
 
 Start a Typesense reindex and poll progress:
